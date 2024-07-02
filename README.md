@@ -1,4 +1,4 @@
-# Annotate Vids
+# Mark VLC
 
 Allows creating and navigating annotated marks in a video playing in VLC. Marks are generated in a dokuwiki markup format and feature a table of contents, notes sections for each mark, and links to play from any marked timestamp.
 
