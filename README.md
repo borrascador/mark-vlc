@@ -22,7 +22,7 @@ You can open the annotations file in a program such as VSCode to add notes as yo
 
 ## Sample Outline
 
-"""
+```
 ====== TITLE ======
 
 [[LINK|START]]
@@ -50,4 +50,4 @@ Summary text
   * Description 2
     * More text and even more
 
-"""
+```
