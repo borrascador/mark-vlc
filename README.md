@@ -19,3 +19,35 @@ You can open the annotations file in a program such as VSCode to add notes as yo
   * `<cmd>+<shift>+.`: skips to next mark.
   * `<cmd>+<shift>+,`: skips to previous mark.
   * `<cmd>+<shift>+d`: quits program.
+
+## Sample Outline
+
+"""
+====== TITLE ======
+
+[[LINK|START]]
+
+Summary text
+
+===== Scenes =====
+
+==== Links to Scenes ====
+
+  * [[#HH:MM:SS - SCENE SUMMARY 1]] > [[LINK|PLAY]]
+  * [[#HH:MM:SS - SCENE SUMMARY 2]] > [[LINK|PLAY]]
+
+==== Scene Listing ====
+
+=== HH:MM:SS - SCENE SUMMARY 1 ===
+
+  * [[LINK|PLAY SCENE]]
+  * Description 1
+    * More text
+
+=== HH:MM:SS - SCENE SUMMARY 2 ===
+
+  * [[LINK|PLAY SCENE]]
+  * Description 2
+    * More text and even more
+
+"""

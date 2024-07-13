@@ -1,46 +1,20 @@
 import os, sys, re
 from python_vlc_http import HttpVLC
 from pynput import keyboard
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from itertools import chain
-
-"""
-SAMPLE OUTLINE:
-
-====== TITLE ======
-
-[[LINK|START]]
-
-Summary text
-
-===== Scenes =====
-
-==== Links to Scenes ====
-
-  * [[#HH:MM:SS - SCENE SUMMARY 1]] > [[LINK|PLAY]]
-  * [[#HH:MM:SS - SCENE SUMMARY 2]] > [[LINK|PLAY]]
-
-==== Scene Listing ====
-
-=== HH:MM:SS - SCENE SUMMARY 1 ===
-
-  * [[LINK|PLAY SCENE]]
-  * Description 1
-    * More text
-
-=== HH:MM:SS - SCENE SUMMARY 2 ===
-
-  * [[LINK|PLAY SCENE]]
-  * Description 2
-    * More text and even more
-
-"""
 
 # VLC CONNECTION CONFIG + SECRETS
 LOCAL_HOST = 'http://127.0.0.1:8088'
 LOCAL_USER = ''
 LOCAL_PASS = 'pass'
 LOCAL_ROOT = 'http://:pass@127.0.0.1:8088'
+
+# DOKUWIKI LOCATION
+LOCAL_DW_MOVIES_DIR = '/Users/jan/src/pills/dokuwiki/dokuwiki/data/pages/movies/films'
+SAVE_TO_LOCAL_DW = True
+SAVE_TO_REMOTE_DW = False # TODO
+SAVE_TO_FILM_DIR = False # TODO for now set SAVE_TO_LOCAL_DW = False
 
 # HEADING CONSTANTS
 H1 = '======'
@@ -62,8 +36,8 @@ def on_activate_play():
     vlc_client.play()
 
 def on_activate_next():
-    path = get_path()
-    with open(path + "/annotations.dokuwiki", "r") as f:
+    filename = get_output_filename()
+    with open(filename, "r") as f:
         lines = f.readlines()
         sorted_times = get_sorted_times(lines, reverse=True)
         current_pos = get_current_seconds()
@@ -79,8 +53,8 @@ def on_activate_next():
             print('Jump failed: no next mark')
 
 def on_activate_prev():
-    path = get_path()
-    with open(path + "/annotations.dokuwiki", "r") as f:
+    filename = get_output_filename()
+    with open(filename, "r") as f:
         lines = f.readlines()
         sorted_times = get_sorted_times(lines)
         current_pos = get_current_seconds()
@@ -103,7 +77,9 @@ def on_activate_exit():
 #
 
 def get_current_seconds():
-    return round(vlc_client.position() * vlc_client.media_length())
+    position = vlc_client.position() if vlc_client.position() else 0
+    media_length = vlc_client.media_length()
+    return round(position * media_length)
 
 def seconds_to_hhmmss(seconds):
     hours = int(seconds // 3600)
@@ -140,25 +116,34 @@ def get_sorted_lines(lines, reverse=False):
 #
 
 def clean_file(seconds):
-    path = get_path()
     new_lines = []
-    with open(path + "/annotations.dokuwiki", "r") as rf:
+    filename = get_output_filename()
+    with open(filename, "r") as rf:
         lines = rf.readlines()       # read
 
         open_section = None
+        open_title_section = False
         lines_by_section = {}
         section_list = []
         for line in lines:
-            if line.startswith('='):
+            if line.startswith(H2 + ' Scenes'):
+                open_title_section = False
+
+            if line.startswith('=') and open_title_section is False:
                 open_section = line
                 lines_by_section[line] = [line]
                 if line not in section_list:
                     section_list.append(line)
+            elif line.startswith('{{tag'):
+                continue
             elif open_section:
                 lines_by_section[open_section].append(line)
             # matches = re.findall(r"\[\[(.*?)\]\]", line)
             # if len(matches) == 2:
             #     print(matches)
+
+            if line.startswith(H1):
+                open_title_section = True
 
         ## TITLE
         indices = [position for position, section_heading in enumerate(section_list) if section_heading.startswith(f'{H1} ')]
@@ -214,9 +199,10 @@ def clean_file(seconds):
 
         for section_heading in SECTION_ORDER:
             new_lines = new_lines + lines_by_section[section_heading]
-        new_lines = new_lines + scene_heading_strings
+        page_tag = create_page_tag()
+        new_lines = new_lines + scene_heading_strings + page_tag
 
-    with open(path + "/annotations.dokuwiki", "w") as wf:
+    with open(filename, "w") as wf:
         wf.write(''.join(new_lines)) # write
         print(f'Added new mark: {seconds_to_hhmmss(seconds)}')
 
@@ -224,27 +210,62 @@ def clean_file(seconds):
 ## Text Read/Write Helper Functions
 #
 
-def create_play_link(seconds):
+def create_play_movie_link():
+    mrl = get_mrl()
+    return f'  * [[{LOCAL_ROOT}/requests/status.xml?command=in_play&input={mrl}|PLAY MOVIE]]\n'
+
+def create_play_scene_link(seconds):
     return f'[[{LOCAL_ROOT}/requests/status.xml?command=seek&val={seconds}|PLAY SCENE]]'
 
 def extract_movie_title():
+    return extract_film_metadata()['movie_title']
+
+def extract_director_name():
+    return extract_film_metadata()['director_name']
+
+def extract_movie_year():
+    return extract_film_metadata()['movie_year']
+
+def extract_film_metadata():
     filename = get_path(get_filename=True)
-    return filename.split(' - ')[0]
+    metadata = {}
+    metadata['movie_title'] = filename.split(' - ')[0]
+    metadata['director_name'] = ' '.join(filename.split(' - ')[1].split(' ')[:-2])
+    metadata['movie_year'] = filename.split(' ')[-1:][0].split('.')[0]
+    return metadata
+
+def get_output_filename():
+    path = get_path()
+    title = extract_movie_title().replace(' ', '_')
+    year = extract_movie_year()
+    if SAVE_TO_LOCAL_DW:
+        return f'{LOCAL_DW_MOVIES_DIR}/{title}_{year}.txt'.lower()
+    else:
+        return f'{path}/{title}_{year}.txt'.lower()
 
 def create_movie_title_section():
     movie_title = extract_movie_title()
-    return [f'{H1} {movie_title} {H1}\n', '\n']
+    return [
+        f'{H1} {movie_title} {H1}\n',
+        '\n',
+        create_play_movie_link(),
+        '\n'
+    ]
+
+def create_page_tag():
+    name = extract_director_name().replace(' ', '_')
+    return [f'{{{{tag>movies:Films movies:people:directors:{name}}}}}\n']
 
 def create_scene_link(seconds, name=''):
     hhmmss = seconds_to_hhmmss(seconds)
-    play_link = create_play_link(seconds)
+    play_link = create_play_scene_link(seconds)
     if name:
         name = f' - {name}'
     return [f'  * [[#{hhmmss}{name}]] > {play_link}\n']
 
 def create_scene_section(seconds, name='', lines_by_section=None, section_list=None):
     hhmmss = seconds_to_hhmmss(seconds)
-    play_link = create_play_link(seconds)
+    play_link = create_play_scene_link(seconds)
     if name:
         name = f' - {name}'
 
@@ -286,25 +307,29 @@ def parse_scene_heading(line):
 #
 
 def setup_annotation_file():
-    path = get_path()
-    # Check for annotation file in same location as video file
-    # If it doesn't exist, create it.
-    filename = path + "/annotations.dokuwiki"
+    # Check for annotation file. If it doesn't exist, create it.
+    filename = get_output_filename()
     if not os.path.exists(filename):
         open(filename, 'w').close()
 
-def get_path(get_filename=False):
+def get_path(get_filename=False, get_fullpath=False):
     playlist_data = vlc_client.fetch_playlist()
     current_uri = dfs(playlist_data)
     # Returns video path in the following format (example):
-    # file:///Users/jan/Movies/Yakuza%20Graveyard%20-%20RAW/title_t00.mkv
+    # file:///Users/foobar/Movies/Toy%20Story%20.mkv
     # So we strip filename and fix the string format
     path = current_uri.replace('file://', '')
     path = unquote(path)
     if get_filename:
         return path.split('/')[-1]
+    elif get_fullpath:
+        return path
     else:
         return '/'.join(path.split('/')[:-1])
+    
+def get_mrl():
+    path = get_path(get_fullpath=True)
+    return quote(path)
 
 def dfs(root_node):
     # Depth-first search
@@ -331,8 +356,6 @@ if __name__ == '__main__':
         print('Run `vlc --extraintf http --http-port 8088 --http-password pass FILENAME` to start VLC first.')
         print('Exiting.')
         sys.exit()
-
-    setup_annotation_file()
 
     with keyboard.GlobalHotKeys({
         '<cmd>+<shift>+<space>': on_activate_annotate,
