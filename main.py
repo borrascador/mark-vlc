@@ -1,4 +1,5 @@
-import os, sys, re
+import os, sys, re, argparse
+from pathlib import Path
 from python_vlc_http import HttpVLC
 from pynput import keyboard
 from urllib.parse import unquote, quote
@@ -10,18 +11,59 @@ LOCAL_USER = ''
 LOCAL_PASS = 'pass'
 LOCAL_ROOT = 'http://:pass@127.0.0.1:8088'
 
-# DOKUWIKI LOCATION
-LOCAL_DW_MOVIES_DIR = '/Users/jan/src/pills/dokuwiki/dokuwiki/data/pages/movies/films'
-SAVE_TO_LOCAL_DW = True
-SAVE_TO_REMOTE_DW = False # TODO
-SAVE_TO_FILM_DIR = False # TODO for now set SAVE_TO_LOCAL_DW = False
-
 # HEADING CONSTANTS
 H1 = '======'
 H2 = '====='
 H3 = '===='
 H4 = '==='
 H5 = '=='
+
+def main():
+    # Connect to VLC
+    try:
+        # First run:
+        # vlc --extraintf http --http-port 8088 --http-password pass FILENAME
+        global vlc_client
+        vlc_client = HttpVLC(LOCAL_HOST, LOCAL_USER, LOCAL_PASS)
+    except:
+        print('VLC connection failed!')
+        print('Run `vlc --extraintf http --http-port 8088 --http-password pass FILENAME` to start VLC first.')
+        print('Exiting.')
+        sys.exit()
+
+    # Parse command arguments
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-t", "--customtitle", action='store_true', help="enable custom title format parsing")
+    ap.add_argument("-p", "--custompath", type=Path, help="custom output save location")
+    ap.add_argument("-r", "--remotepath", action='store_true', help="save to remote server location") # TODO
+    args = vars(ap.parse_args())
+
+    global custom_title_format
+    custom_title_format = False
+    if args["customtitle"]:
+        custom_title_format = True
+
+    global custom_path
+    custom_path = False
+    if args["custompath"] and Path.exists(Path(args["custompath"])) and Path.is_dir(Path(args["custompath"])):
+        custom_path = Path(args["custompath"])
+
+    # Display instructions
+    print("Welcome to mark-vlc. To use, navigate to a  Hotkeys:")
+    print("CMD + SHIFT + SPACE: Insert annotation and create / cleanup Dokuwiki file (remember to save changes between refreshes).")
+    print("CMD + SHIFT + P: Play / Pause")
+    print("CMD + SHIFT + .: Jump to next mark")
+    print("CMD + SHIFT + ,: Jump to previous mark")
+    print("CMD + SHIFT + D: Exit program\n")
+
+    # Set keyboard listeners
+    with keyboard.GlobalHotKeys({
+        '<cmd>+<shift>+<space>': on_activate_annotate,
+        '<cmd>+<shift>+p': on_activate_play,
+        '<cmd>+<shift>+.': on_activate_next,
+        '<cmd>+<shift>+,': on_activate_prev,
+        '<cmd>+<shift>+d': on_activate_exit
+    }) as h: h.join()
 
 #
 ## Hotkey functions
@@ -118,89 +160,93 @@ def get_sorted_lines(lines, reverse=False):
 def clean_file(seconds):
     new_lines = []
     filename = get_output_filename()
-    with open(filename, "r") as rf:
-        lines = rf.readlines()       # read
 
-        open_section = None
-        open_title_section = False
-        lines_by_section = {}
-        section_list = []
-        for line in lines:
-            if line.startswith(H2 + ' Scenes'):
-                open_title_section = False
+    if Path.exists(Path(filename)):
+        with open(filename, "r") as rf:
+            lines = rf.readlines()       # read
+    else:
+        lines = []
 
-            if line.startswith('=') and open_title_section is False:
-                open_section = line
-                lines_by_section[line] = [line]
-                if line not in section_list:
-                    section_list.append(line)
-            elif line.startswith('{{tag'):
-                continue
-            elif open_section:
-                lines_by_section[open_section].append(line)
-            # matches = re.findall(r"\[\[(.*?)\]\]", line)
-            # if len(matches) == 2:
-            #     print(matches)
+    open_section = None
+    open_title_section = False
+    lines_by_section = {}
+    section_list = []
+    for line in lines:
+        if line.startswith(H2 + ' Scenes'):
+            open_title_section = False
 
-            if line.startswith(H1):
-                open_title_section = True
+        if line.startswith('=') and open_title_section is False:
+            open_section = line
+            lines_by_section[line] = [line]
+            if line not in section_list:
+                section_list.append(line)
+        elif line.startswith('{{tag'):
+            continue
+        elif open_section:
+            lines_by_section[open_section].append(line)
+        # matches = re.findall(r"\[\[(.*?)\]\]", line)
+        # if len(matches) == 2:
+        #     print(matches)
 
-        ## TITLE
-        indices = [position for position, section_heading in enumerate(section_list) if section_heading.startswith(f'{H1} ')]
-        if len(indices) == 0:
-            movie_title_section = create_movie_title_section()
-            TITLE = movie_title_section[0]
-            lines_by_section[TITLE] = movie_title_section
-        else:
-            TITLE = section_list[indices[0]]
+        if line.startswith(H1):
+            open_title_section = True
 
-        ## SECTION ORDER
-        SCENES = '===== Scenes =====\n'
-        LINKS_TO_SCENES = '==== Links to Scenes ====\n'
-        SCENE_LISTING = '==== Scene Listing ====\n'
-        SECTION_ORDER = [TITLE, SCENES, LINKS_TO_SCENES, SCENE_LISTING]
+    ## TITLE
+    indices = [position for position, section_heading in enumerate(section_list) if section_heading.startswith(f'{H1} ')]
+    if len(indices) == 0:
+        movie_title_section = create_movie_title_section()
+        TITLE = movie_title_section[0]
+        lines_by_section[TITLE] = movie_title_section
+    else:
+        TITLE = section_list[indices[0]]
 
-        ## SCENES
-        indices = [position for position, section_heading in enumerate(section_list) if SCENES in section_heading]
-        if len(indices) == 0:
-            section = SCENES
-            lines_by_section[section] = [section, '\n']
+    ## SECTION ORDER
+    SCENES = '===== Scenes =====\n'
+    LINKS_TO_SCENES = '==== Links to Scenes ====\n'
+    SCENE_LISTING = '==== Scene Listing ====\n'
+    SECTION_ORDER = [TITLE, SCENES, LINKS_TO_SCENES, SCENE_LISTING]
 
-        ## LINKS TO SCENES
-        indices = [position for position, section_heading in enumerate(section_list) if LINKS_TO_SCENES in section_heading]
-        if len(indices) == 0:
-            section = LINKS_TO_SCENES
-            lines_by_section[section] = [section, '\n']
+    ## SCENES
+    indices = [position for position, section_heading in enumerate(section_list) if SCENES in section_heading]
+    if len(indices) == 0:
+        section = SCENES
+        lines_by_section[section] = [section, '\n']
 
-        ## SCENE LISTING
-        indices = [position for position, section_heading in enumerate(section_list) if SCENE_LISTING in section_heading]
-        if len(indices) == 0:
-            section = SCENE_LISTING
-            lines_by_section[section] = [section, '\n']
+    ## LINKS TO SCENES
+    indices = [position for position, section_heading in enumerate(section_list) if LINKS_TO_SCENES in section_heading]
+    if len(indices) == 0:
+        section = LINKS_TO_SCENES
+        lines_by_section[section] = [section, '\n']
 
-        ## HANDLE SCENE LINKS + LISTINGS TOGETHER
-        new_scene_link = create_scene_link(seconds)
-        scene_links = [parse_scene_link(link) for link in (lines_by_section[LINKS_TO_SCENES] + new_scene_link) if link.startswith('  * [[#')]
+    ## SCENE LISTING
+    indices = [position for position, section_heading in enumerate(section_list) if SCENE_LISTING in section_heading]
+    if len(indices) == 0:
+        section = SCENE_LISTING
+        lines_by_section[section] = [section, '\n']
 
-        new_scene_section = create_scene_section(seconds)
-        scene_headings = [parse_scene_heading(heading) for heading in (section_list + [new_scene_section[0]]) if heading.startswith(f'{H4} ')]
+    ## HANDLE SCENE LINKS + LISTINGS TOGETHER
+    new_scene_link = create_scene_link(seconds)
+    scene_links = [parse_scene_link(link) for link in (lines_by_section[LINKS_TO_SCENES] + new_scene_link) if link.startswith('  * [[#')]
 
-        # Depending on list concat order, prioritizes link or heading name in scene_dict
-        # Currently prioritizes link name and performs sorting on combined dict
-        scene_dict = dict(sorted(dict(scene_headings + scene_links).items()))
+    new_scene_section = create_scene_section(seconds)
+    scene_headings = [parse_scene_heading(heading) for heading in (section_list + [new_scene_section[0]]) if heading.startswith(f'{H4} ')]
 
-        scene_link_strings = [''.join(create_scene_link(seconds, name)) for (seconds, name) in scene_dict.items()]
-        scene_heading_strings = list(chain(*[
-            create_scene_section(seconds, name, lines_by_section, section_list)
-            for (seconds, name) in scene_dict.items()
-        ]))
+    # Depending on list concat order, prioritizes link or heading name in scene_dict
+    # Currently prioritizes link name and performs sorting on combined dict
+    scene_dict = dict(sorted(dict(scene_headings + scene_links).items()))
 
-        lines_by_section[LINKS_TO_SCENES] = lines_by_section[LINKS_TO_SCENES][0:2] + scene_link_strings + ['\n']
+    scene_link_strings = [''.join(create_scene_link(seconds, name)) for (seconds, name) in scene_dict.items()]
+    scene_heading_strings = list(chain(*[
+        create_scene_section(seconds, name, lines_by_section, section_list)
+        for (seconds, name) in scene_dict.items()
+    ]))
 
-        for section_heading in SECTION_ORDER:
-            new_lines = new_lines + lines_by_section[section_heading]
-        page_tag = create_page_tag()
-        new_lines = new_lines + scene_heading_strings + page_tag
+    lines_by_section[LINKS_TO_SCENES] = lines_by_section[LINKS_TO_SCENES][0:2] + scene_link_strings + ['\n']
+
+    for section_heading in SECTION_ORDER:
+        new_lines = new_lines + lines_by_section[section_heading]
+    page_tag = create_page_tag()
+    new_lines = new_lines + scene_heading_strings + page_tag
 
     with open(filename, "w") as wf:
         wf.write(''.join(new_lines)) # write
@@ -236,12 +282,14 @@ def extract_film_metadata():
 
 def get_output_filename():
     path = get_path()
-    title = extract_movie_title().replace(' ', '_')
-    year = extract_movie_year()
-    if SAVE_TO_LOCAL_DW:
-        return f'{LOCAL_DW_MOVIES_DIR}/{title}_{year}.txt'.lower()
-    else:
-        return f'{path}/{title}_{year}.txt'.lower()
+    filename = get_path(get_filename=True)
+    if custom_path:
+        path = custom_path
+    if custom_title_format:
+        title = extract_movie_title().replace(' ', '_')
+        year = extract_movie_year()
+        filename = f'{title}_{year}'
+    return f'{path}/{filename}.txt'.lower()
 
 def create_movie_title_section():
     movie_title = extract_movie_title()
@@ -347,20 +395,4 @@ def dfs(root_node):
 #
 
 if __name__ == '__main__':
-    try:
-        # First run:
-        # vlc --extraintf http --http-port 8088 --http-password pass FILENAME
-        vlc_client = HttpVLC(LOCAL_HOST, LOCAL_USER, LOCAL_PASS)
-    except:
-        print('VLC connection failed!')
-        print('Run `vlc --extraintf http --http-port 8088 --http-password pass FILENAME` to start VLC first.')
-        print('Exiting.')
-        sys.exit()
-
-    with keyboard.GlobalHotKeys({
-        '<cmd>+<shift>+<space>': on_activate_annotate,
-        '<cmd>+<shift>+p': on_activate_play,
-        '<cmd>+<shift>+.': on_activate_next,
-        '<cmd>+<shift>+,': on_activate_prev,
-        '<cmd>+<shift>+d': on_activate_exit
-    }) as h: h.join()
+    main()
